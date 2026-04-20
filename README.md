@@ -1,174 +1,117 @@
-# CoreCoder
+﻿# LiteCoder
 
-> 原名 **NanoCoder**，为避免与 [Nano-Collective/nanocoder](https://github.com/Nano-Collective/nanocoder) 混淆而改名。旧链接自动跳转到这里。
+[English](README.md) | [中文](README_zh.md)
 
+Version: 0.1.0  
+License: MIT
 
-[English](README.md) | [中文](README_CN.md) | [Claude Code 源码深度导读（7 篇）](article/)
+LiteCoder is a lightweight terminal AI coding assistant. It combines common agent coding workflows (read files, edit files, run commands, and save sessions) into a practical local CLI tool.
 
-[![PyPI](https://img.shields.io/pypi/v/corecoder)](https://pypi.org/project/corecoder/)
-[![Python](https://img.shields.io/badge/python-3.10+-blue)](https://python.org)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Tests](https://github.com/he-yufeng/CoreCoder/actions/workflows/ci.yml/badge.svg)](https://github.com/he-yufeng/CoreCoder/actions)
+## Background
 
-**51万行 TypeScript → 950 行 Python。**
+This project is a simplified implementation created by the author after studying Claude Code source architecture on an open-source project. The goal is to keep the high-value agent capabilities while removing heavy engineering overhead, so the codebase is easier to read, modify, and extend.
 
-我逆向了 Claude Code 泄露的全部源码，然后把不承重的部分全扔掉，用 Python 重建了核心。成果：**Claude Code 的每一个关键架构模式，浓缩在一个下午能读完的代码库里。**
+## What This Project Does
 
-CoreCoder 不仅是一个 AI 编程工具。它是一份**蓝图**，编程 Agent 领域的 [nanoGPT](https://github.com/karpathy/nanoGPT)。读懂它，fork 它，然后造你自己的。
+- Provides an interactive REPL for continuous coding conversations.
+- Includes built-in tools: `read_file`, `edit_file`, `write_file`, `bash`, `glob`, `grep`, and `agent`.
+- Supports session persistence: save, restore, and switch sessions under `.litecoder/`.
+- Uses context compression to control token growth in long chats.
+- Supports persistent rules via `/rule`, automatically injected into system prompts.
+- Supports Chinese and English interface modes.
 
----
+## Installation and Quick Start
 
-```
-$ litecoder -m kimi-k2.5
+### 1) Install
 
-You > 读一下 main.py，修掉拼错的 import
-
-  > read_file(file_path='main.py')
-  > edit_file(file_path='main.py', ...)
-
---- a/main.py
-+++ b/main.py
-@@ -1 +1 @@
--from utils import halper
-+from utils import helper
-
-修好了：halper → helper。
-```
-
-## 你能得到什么
-
-Claude Code 51 万行源码提炼出来的 7 个核心模式：
-
-| 设计模式 | Claude Code | CoreCoder |
-|---|---|---|
-| 搜索替换编辑（唯一匹配 + diff） | FileEditTool | `tools/edit.py` — 70 行 |
-| 并行工具执行 | StreamingToolExecutor（530行） | `agent.py` — ThreadPool |
-| 三层上下文压缩 | HISTORY_SNIP → Microcompact → CONTEXT_COLLAPSE | `context.py` — 145 行 |
-| 子代理隔离上下文 | AgentTool（1,397行） | `tools/agent.py` — 50 行 |
-| 危险命令拦截 | BashTool（1,143行） | `tools/bash.py` — 95 行 |
-| 会话持久化 | QueryEngine（1,295行） | `session.py` — 65 行 |
-| 动态系统提示词 | prompts.ts（914行） | `prompt.py` — 35 行 |
-
-每个模式都是可运行的实现，不是流程图，不是博客文章。
-
-## 安装
+With `uv` (recommended):
 
 ```bash
-pip install corecoder
+uv pip install -e .
 ```
 
-选你的模型，任何 OpenAI 兼容 API 都行。可以 `export` 环境变量，也可以在项目根目录放一个 `.env` 文件：
+Or with pip:
 
 ```bash
-# Kimi K2.5
-export OPENAI_API_KEY=你的key OPENAI_BASE_URL=https://api.moonshot.ai/v1
-litecoder -m kimi-k2.5
-
-# Claude Opus 4.6（通过 OpenRouter）
-export OPENAI_API_KEY=你的key OPENAI_BASE_URL=https://openrouter.ai/api/v1
-litecoder -m anthropic/claude-opus-4-6
-
-# OpenAI GPT-5
-export OPENAI_API_KEY=sk-...
-litecoder -m gpt-5
-
-# DeepSeek V3
-export OPENAI_API_KEY=sk-... OPENAI_BASE_URL=https://api.deepseek.com
-litecoder -m deepseek-chat
-
-# Qwen 3.5
-export OPENAI_API_KEY=sk-... OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-litecoder -m qwen-max
-
-# Ollama（本地）
-export OPENAI_API_KEY=ollama OPENAI_BASE_URL=http://localhost:11434/v1
-litecoder -m qwen3:32b
-
-# 单次模式
-litecoder -p "给 parse_config() 加上错误处理"
+pip install -e .
 ```
 
-## 架构
+### 2) Configure model environment
 
-整个项目一目了然：
+Create a `.env` in your workspace (example):
 
-```
-corecoder/
-├── cli.py            REPL + 命令                   218 行
-├── agent.py          Agent 循环 + 并行执行          122 行
-├── llm.py            流式客户端 + 重试              156 行
-├── context.py        三层压缩                       196 行
-├── session.py        会话保存/恢复                   68 行
-├── prompt.py         系统提示词                      33 行
-├── config.py         环境变量配置                    55 行
-└── tools/
-    ├── bash.py       Shell + 安全 + cd 追踪         115 行
-    ├── edit.py       搜索替换 + diff                  85 行
-    ├── read.py       文件读取                         53 行
-    ├── write.py      文件写入                         36 行
-    ├── glob_tool.py  文件搜索                         47 行
-    ├── grep.py       内容搜索                         78 行
-    └── agent.py      子代理生成                       58 行
+```env
+LITECODER_API_KEY=sk-xxxx
+LITECODER_BASE_URL=https://api.openai.com/v1
+LITECODER_MODEL=gpt-4o
+LITECODER_LANG=en
 ```
 
-## 当库用
+### 3) Run
 
-```python
-from corecoder import Agent, LLM
-
-llm = LLM(model="kimi-k2.5", api_key="your-key", base_url="https://api.moonshot.ai/v1")
-agent = Agent(llm=llm)
-response = agent.chat("找出项目里所有 TODO 注释并列出来")
+```bash
+litecoder
 ```
 
-## 加自定义工具（约 20 行）
+On first launch, LiteCoder guides you through basic setup and stores config in your workspace.
 
-```python
-from corecoder.tools.base import Tool
+## Commands
 
-class HttpTool(Tool):
-    name = "http"
-    description = "请求一个 URL。"
-    parameters = {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}
-
-    def execute(self, url: str) -> str:
-        import urllib.request
-        return urllib.request.urlopen(url).read().decode()[:5000]
+```text
+/help                 Show help
+/model [name]         Show/switch model
+/tokens               Show token usage
+/compact              Manually compact context
+/diff                 Show changed files in current session
+/save                 Save current session
+/sessions             List saved sessions
+/session ...          Session ops (list/new/switch/save/current)
+/rule ...             Rule ops (list/add/del/clear)
+/reset                Clear current chat history
+quit                  Exit
 ```
 
-## 命令
+## Examples
 
-```
-/model           查看当前模型
-/model <名称>    切换模型
-/compact         压缩上下文（对标 Claude Code 的 /compact）
-/tokens          查看 token 用量 + 费用估算
-/diff            查看本次会话修改的文件
-/save            保存会话
-/sessions        列出已保存的会话
-/reset           清空历史
-quit             退出
+### Example 1: Fix code
+
+```text
+You > Read src/main.py, fix import errors, and apply the smallest safe patch.
 ```
 
-## 对比
+LiteCoder will call tools as needed (for example `read_file` and `edit_file`) and return the result.
 
-|  | Claude Code | Claw-Code | Aider | CoreCoder |
-|---|---|---|---|---|
-| 代码量 | 51万行（闭源） | 10万+行 | 5万+行 | **~950 行** |
-| 模型 | 仅 Anthropic | 多模型 | 多模型 | **任意 OpenAI 兼容** |
-| 能通读吗？ | 不能 | 很难 | 有点费劲 | **一个下午** |
-| 适合 | 直接用 | 直接用 | 直接用 | **先看懂，再造自己的** |
+### Example 2: Save and switch sessions
 
-## 源码导读
+```text
+/save
+/sessions
+/session switch session_1710000000
+```
 
-我还写了 [7 篇 Claude Code 架构深度导读](article/)：Agent 循环、工具系统、上下文压缩、流式执行、多 Agent、隐藏功能。想知道 CoreCoder 为什么这样设计，从那里开始。
+### Example 3: Add persistent rules
 
-## License
+```text
+/rule add Read target files before editing.
+/rule add Prefer minimal safe changes in final responses.
+```
 
-MIT。Fork，然后拿去造更好的东西，如果能标注此出处就更好了。
+These rules are automatically applied in later conversations.
 
----
+## Project Structure (Simplified)
 
-作者 **[何宇峰](https://github.com/he-yufeng)** · Agentic AI Researcher @ Moonshot AI (Kimi)
+```text
+litecoder/
+  cli.py         REPL entry and command handling
+  agent.py       Agent loop and tool orchestration
+  llm.py         LLM client and streaming
+  context.py     Context compression
+  session.py     Session persistence
+  prompt.py      System prompt assembly
+  tools/         Tool implementations
+```
 
-[Claude Code 源码分析（知乎 17 万阅读，6000收藏）](https://zhuanlan.zhihu.com/p/1898797658343862272)
+## Acknowledgements
+
+Special thanks to the original author [Yufeng He](https://github.com/he-yufeng) and the CoreCoder open-source work and architecture analysis that inspired this project.
+
