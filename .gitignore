@@ -1,0 +1,27 @@
+
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# virtual environment
+.env
+.venv/
+venv/
+
+# mypy
+.mypy_cache/
+.ruff_cache/
+.corecoder_history
+.litecoder/
+.DS_Store
+dist/
+.pytest_cache/
+
+# ide
+.vscode/
+.idea/
