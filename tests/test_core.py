@@ -6,7 +6,9 @@ import tempfile
 
 from litecoder import Agent, LLM, Config, ALL_TOOLS, __version__
 from litecoder.context import ContextManager, estimate_tokens
+from litecoder.cli import _resolve_session_save_id
 from litecoder.session import save_session, load_session, list_sessions
+from litecoder.rules import add_rule, load_rules, delete_rule, clear_rules, render_rules_prompt
 from litecoder.tools import get_tool
 
 
@@ -19,7 +21,7 @@ def test_public_api_exports():
     assert Agent is not None
     assert LLM is not None
     assert Config is not None
-    assert len(ALL_TOOLS) == 7
+    assert len(ALL_TOOLS) == 8
 
 
 def test_config_from_env():
@@ -71,6 +73,39 @@ def test_context_snip():
     assert after < before
 
 
+def test_context_externalize_huge_tool_output():
+    huge = "line\n" * 5000  # > 12000 chars, should be externalized to local file
+
+    with tempfile.TemporaryDirectory() as tmp:
+        old_workdir = os.environ.get("LITECODER_WORKDIR")
+        os.environ["LITECODER_WORKDIR"] = tmp
+        try:
+            ctx = ContextManager(max_tokens=3000)
+            msgs = [
+                {"role": "tool", "tool_call_id": "t_huge", "content": huge},
+            ]
+            changed = ctx._snip_tool_outputs(msgs)
+            assert changed is True
+
+            replaced = msgs[0]["content"]
+            assert "[tool output externalized]" in replaced
+            assert "Full output saved to:" in replaced
+
+            path_line = [ln for ln in replaced.splitlines() if ln.startswith("Full output saved to:")][0]
+            saved_path = path_line.split(":", 1)[1].strip()
+            full_path = pathlib.Path(saved_path)
+            if not full_path.is_absolute():
+                full_path = pathlib.Path(tmp) / full_path
+
+            assert full_path.exists()
+            assert full_path.read_text(encoding="utf-8") == huge
+        finally:
+            if old_workdir is None:
+                os.environ.pop("LITECODER_WORKDIR", None)
+            else:
+                os.environ["LITECODER_WORKDIR"] = old_workdir
+
+
 def test_context_compress():
     ctx = ContextManager(max_tokens=2000)
     msgs = []
@@ -108,6 +143,33 @@ def test_list_sessions():
     with tempfile.TemporaryDirectory() as tmp:
         sessions = list_sessions(workdir=tmp)
         assert isinstance(sessions, list)
+
+
+def test_resolve_session_save_id_priority():
+    assert _resolve_session_save_id("current_sid", None) == "current_sid"
+    assert _resolve_session_save_id("current_sid", "explicit_sid") == "explicit_sid"
+    assert _resolve_session_save_id(None, None) is None
+
+
+def test_rules_roundtrip():
+    with tempfile.TemporaryDirectory() as tmp:
+        add_rule(tmp, "Always write tests for bug fixes")
+        add_rule(tmp, "Prefer minimal changes")
+        rules = load_rules(tmp)
+        assert len(rules) == 2
+        assert "Always write tests" in rules[0]
+
+        ok, left = delete_rule(tmp, 1)
+        assert ok is True
+        assert len(left) == 1
+
+        prompt_rules = render_rules_prompt(tmp)
+        assert "1." in prompt_rules
+
+        clear_rules(tmp)
+        assert load_rules(tmp) == []
+
+
 
 
 # --- Cost estimation ---

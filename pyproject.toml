@@ -5,7 +5,6 @@ build-backend = "hatchling.build"
 [project]
 name = "litecoder"
 version = "0.1.0"
-description = "Minimal AI coding agent (~1400 LoC) inspired by Claude Code. Works with any LLM. (formerly NanoCoder)"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
@@ -38,7 +37,3 @@ dev = ["pytest>=7.0"]
 litecoder = "litecoder.cli:main"
 
 
-[project.urls]
-Homepage = "https://github.com/he-yufeng/CoreCoder"
-Repository = "https://github.com/he-yufeng/CoreCoder"
-Issues = "https://github.com/he-yufeng/CoreCoder/issues"

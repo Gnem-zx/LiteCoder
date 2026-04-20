@@ -29,6 +29,7 @@ from .agent import Agent
 from .llm import LLM
 from .config import Config
 from .session import save_session, load_session, list_sessions
+from .rules import load_rules, add_rule, delete_rule, clear_rules, render_rules_prompt
 from .i18n import normalize_lang, tr
 from . import __version__
 
@@ -376,6 +377,9 @@ def main():
     )
 
     agent = Agent(llm=llm, max_context_tokens=config.max_context_tokens)
+    _refresh_prompt_extensions(agent, workdir)
+
+    current_session_id: str | None = None
 
     if args.resume:
         loaded = load_session(args.resume, workdir=workdir)
@@ -385,11 +389,12 @@ def main():
                 agent.llm.model = loaded_model
                 config.model = loaded_model
             console.print(tr(lang, "resumed_session", sid=args.resume, model=agent.llm.model))
+            current_session_id = args.resume
         else:
             console.print(tr(lang, "resume_not_found", sid=args.resume))
             sys.exit(1)
 
-    _repl(agent, config, workdir)
+    _repl(agent, config, workdir, current_session_id=current_session_id)
 
 
 def _command_completer() -> WordCompleter:
@@ -403,18 +408,174 @@ def _command_completer() -> WordCompleter:
         "/diff",
         "/save",
         "/sessions",
+        "/rule",
         "quit",
         "exit",
-        "gpt-4o",
-        "gpt-5.4",
-        "deepseek-chat",
-        "qwen-max",
-        "kimi-k2.5",
     ]
     return WordCompleter(words, ignore_case=True)
 
 
-def _repl(agent: Agent, config: Config, workdir: Path):
+def _msg(lang: str, zh: str, en: str) -> str:
+    return zh if lang == "zh" else en
+
+
+def _resolve_session_save_id(current_session_id: str | None, requested_id: str | None) -> str | None:
+    """Resolve target session id for save command.
+
+    Priority:
+    1) explicit requested id
+    2) current active session id
+    3) None -> create a new session id
+    """
+    if requested_id and requested_id.strip():
+        return requested_id.strip()
+    if current_session_id and current_session_id.strip():
+        return current_session_id.strip()
+    return None
+
+
+def _refresh_prompt_extensions(agent: Agent, workdir: Path):
+    """重新加载规则与技能，并注入到系统提示词扩展中。"""
+    agent.configure_prompt_extensions(
+        persistent_rules=render_rules_prompt(workdir)
+    )
+
+
+def _confirm_dangerous_command(lang: str, command: str, reason: str) -> bool:
+    """Ask user whether to execute a dangerous bash command."""
+    console.print(_msg(lang, f"[yellow]检测到高危命令: {reason}[/yellow]", f"[yellow]Dangerous command detected: {reason}[/yellow]"))
+    console.print(f"[dim]{command}[/dim]")
+    answer = pt_prompt(
+        _msg(lang, "是否继续执行？输入 yes 执行，其它取消: ", "Execute anyway? Type yes to proceed, anything else to cancel: "),
+        default="no",
+    ).strip().lower()
+    return answer in ("yes", "y")
+
+
+def _handle_session_command(
+    user_input: str,
+    agent: Agent,
+    config: Config,
+    workdir: Path,
+    current_session_id: str | None,
+    lang: str,
+) -> str | None:
+    parts = user_input.split(maxsplit=2)
+
+    # /session 或 /sessions：列出会话
+    if user_input in ("/session", "/sessions") or (len(parts) >= 2 and parts[1] == "list"):
+        sessions = list_sessions(workdir=workdir)
+        if not sessions:
+            console.print(tr(lang, "no_saved_sessions"))
+            return current_session_id
+        for s in sessions:
+            console.print(f"  [cyan]{s['id']}[/cyan] ({s['model']}, {s['saved_at']}) {s['preview']}")
+        return current_session_id
+
+    if len(parts) < 2:
+        console.print(_msg(lang, "用法: /session list|new [id]|switch <id>|save [id]|current", "Usage: /session list|new [id]|switch <id>|save [id]|current"))
+        return current_session_id
+
+    action = parts[1]
+
+    if action == "current":
+        if current_session_id:
+            console.print(_msg(lang, f"当前会话: [cyan]{current_session_id}[/cyan]", f"Current session: [cyan]{current_session_id}[/cyan]"))
+        else:
+            console.print(_msg(lang, "当前尚未绑定会话 ID", "No active session id"))
+        return current_session_id
+
+    if action == "new":
+        requested_id = parts[2].strip() if len(parts) >= 3 else None
+        sid = save_session([], config.model, session_id=requested_id or None, workdir=workdir)
+        agent.switch_session([], model=config.model)
+        console.print(_msg(lang, f"已创建并切换到新会话: [green]{sid}[/green]", f"Created and switched to new session: [green]{sid}[/green]"))
+        return sid
+
+    if action == "switch":
+        if len(parts) < 3 or not parts[2].strip():
+            console.print(_msg(lang, "用法: /session switch <id>", "Usage: /session switch <id>"))
+            return current_session_id
+        sid = parts[2].strip()
+        loaded = load_session(sid, workdir=workdir)
+        if not loaded:
+            console.print(tr(lang, "resume_not_found", sid=sid))
+            return current_session_id
+        msgs, loaded_model = loaded
+        agent.switch_session(msgs, model=loaded_model)
+        config.model = agent.llm.model
+        console.print(_msg(lang, f"已切换到会话: [green]{sid}[/green] (模型: {agent.llm.model})", f"Switched to session: [green]{sid}[/green] (model: {agent.llm.model})"))
+        return sid
+
+    if action == "save":
+        requested_id = parts[2].strip() if len(parts) >= 3 else None
+        target_id = _resolve_session_save_id(current_session_id, requested_id)
+        sid = save_session(agent.messages, config.model, session_id=target_id, workdir=workdir)
+        console.print(tr(lang, "session_saved", sid=sid))
+        console.print(tr(lang, "resume_hint", workdir=str(workdir), sid=sid))
+        return sid
+
+    console.print(_msg(lang, "未知子命令。用法: /session list|new [id]|switch <id>|save [id]|current", "Unknown subcommand. Usage: /session list|new [id]|switch <id>|save [id]|current"))
+    return current_session_id
+
+
+def _handle_rule_command(user_input: str, agent: Agent, workdir: Path, lang: str):
+    parts = user_input.split(maxsplit=2)
+
+    if user_input == "/rule" or (len(parts) >= 2 and parts[1] == "list"):
+        rules = load_rules(workdir)
+        if not rules:
+            console.print(_msg(lang, "当前没有持久规则。", "No persistent rules."))
+            return
+        console.print(_msg(lang, "[bold]当前持久规则:[/bold]", "[bold]Persistent rules:[/bold]"))
+        for i, rule in enumerate(rules, start=1):
+            console.print(f"  {i}. {rule}")
+        return
+
+    if len(parts) < 2:
+        console.print(_msg(lang, "用法: /rule list|add <text>|del <index>|clear", "Usage: /rule list|add <text>|del <index>|clear"))
+        return
+
+    action = parts[1]
+
+    if action == "add":
+        if len(parts) < 3 or not parts[2].strip():
+            console.print(_msg(lang, "用法: /rule add <text>", "Usage: /rule add <text>"))
+            return
+        add_rule(workdir, parts[2].strip())
+        agent.workdir = workdir
+        _refresh_prompt_extensions(agent, workdir)
+        console.print(_msg(lang, "已添加规则并生效。", "Rule added and applied."))
+        return
+
+    if action == "del":
+        if len(parts) < 3:
+            console.print(_msg(lang, "用法: /rule del <index>", "Usage: /rule del <index>"))
+            return
+        try:
+            idx = int(parts[2].strip())
+        except ValueError:
+            console.print(_msg(lang, "index 必须是数字。", "index must be a number."))
+            return
+        ok, _ = delete_rule(workdir, idx)
+        if not ok:
+            console.print(_msg(lang, "删除失败：index 超出范围。", "Delete failed: index out of range."))
+            return
+        _refresh_prompt_extensions(agent, workdir)
+        console.print(_msg(lang, "规则已删除并生效。", "Rule deleted and applied."))
+        return
+
+    if action == "clear":
+        clear_rules(workdir)
+        _refresh_prompt_extensions(agent, workdir)
+        console.print(_msg(lang, "规则已清空。", "Rules cleared."))
+        return
+
+    console.print(_msg(lang, "未知子命令。用法: /rule list|add <text>|del <index>|clear", "Unknown subcommand. Usage: /rule list|add <text>|del <index>|clear"))
+
+
+
+def _repl(agent: Agent, config: Config, workdir: Path, current_session_id: str | None = None):
     """Interactive REPL loop."""
     lang = normalize_lang(config.language)
     base_info = f"  Base: [dim]{config.base_url}[/dim]" if config.base_url else ""
@@ -445,6 +606,7 @@ def _repl(agent: Agent, config: Config, workdir: Path):
         event.current_buffer.insert_text("\n")
 
     completer = _command_completer()
+    active_session_id = current_session_id
 
     while True:
         lang = normalize_lang(config.language)
@@ -504,10 +666,8 @@ def _repl(agent: Agent, config: Config, workdir: Path):
             else:
                 console.print(tr(lang, "nothing_to_compress", before=before, messages=len(agent.messages)))
             continue
-        if user_input == "/save": 
-            sid = save_session(agent.messages, config.model, workdir=workdir)
-            console.print(tr(lang, "session_saved", sid=sid))
-            console.print(tr(lang, "resume_hint", workdir=str(workdir), sid=sid))
+        if user_input == "/save":
+            active_session_id = _handle_session_command("/session save", agent, config, workdir, active_session_id, lang)
             continue
         if user_input == "/diff": 
             from .tools.edit import _changed_files
@@ -519,13 +679,11 @@ def _repl(agent: Agent, config: Config, workdir: Path):
                 for f in sorted(_changed_files):
                     console.print(f"  [cyan]{f}[/cyan]")
             continue
-        if user_input == "/sessions": # 列出已保存的会话，方便用户查看和恢复之前的对话历史。
-            sessions = list_sessions(workdir=workdir)
-            if not sessions:
-                console.print(tr(lang, "no_saved_sessions"))
-            else:
-                for s in sessions:
-                    console.print(f"  [cyan]{s['id']}[/cyan] ({s['model']}, {s['saved_at']}) {s['preview']}")
+        if user_input == "/sessions" or user_input.startswith("/session"):
+            active_session_id = _handle_session_command(user_input, agent, config, workdir, active_session_id, lang)
+            continue
+        if user_input.startswith("/rule"):
+            _handle_rule_command(user_input, agent, workdir, lang)
             continue
 
         streamed: list[str] = []
@@ -538,7 +696,12 @@ def _repl(agent: Agent, config: Config, workdir: Path):
             console.print(f"\n[dim]> {name}({_brief(kwargs)})[/dim]")
 
         try:
-            response = agent.chat(user_input, on_token=on_token, on_tool=on_tool)
+            response = agent.chat(
+                user_input,
+                on_token=on_token,
+                on_tool=on_tool,
+                on_dangerous=lambda cmd, reason: _confirm_dangerous_command(lang, cmd, reason),
+            )
             if streamed:
                 print()
             else:

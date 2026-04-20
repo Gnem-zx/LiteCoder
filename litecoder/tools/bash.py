@@ -15,7 +15,7 @@ from .base import Tool
 # track cwd across commands (Claude Code does this too)
 _cwd: str | None = None
 
-# patterns that could wreck the filesystem or leak secrets
+# 匹配一些高危命令模式，阻止直接执行。可以根据需要调整或扩展这些模式。
 _DANGEROUS_PATTERNS = [
     (r"\brm\s+(-\w*)?-r\w*\s+(/|~|\$HOME)", "recursive delete on home/root"),
     (r"\brm\s+(-\w*)?-rf\s", "force recursive delete"),
@@ -50,11 +50,11 @@ class BashTool(Tool):
         "required": ["command"],
     }
 
-    def execute(self, command: str, timeout: int = 120) -> str:
+    def execute(self, command: str, timeout: int = 120, approved: bool = False) -> str:
         global _cwd
         # safety check
         warning = _check_dangerous(command)
-        if warning:
+        if warning and not approved:
             return f"⚠ Blocked: {warning}\nCommand: {command}\nIf intentional, modify the command to be more specific."
 
         # use tracked working directory
@@ -98,6 +98,11 @@ def _check_dangerous(cmd: str) -> str | None:
         if re.search(pattern, cmd):
             return reason
     return None
+
+
+def is_dangerous_command(cmd: str) -> str | None:
+    """Public helper: return reason if command looks dangerous, else None."""
+    return _check_dangerous(cmd)
 
 
 def _update_cwd(command: str, current_cwd: str):

@@ -41,9 +41,12 @@ class AgentTool(Tool):
         from ..agent import Agent
 
         parent = self._parent_agent
+        # Create fresh tool instances for the sub-agent to avoid mutating
+        # parent tool state (e.g. _parent_agent pointers on stateful tools).
+        sub_tools = [type(t)() for t in parent.tools if t.name != "agent"]
         sub = Agent(
             llm=parent.llm,
-            tools=[t for t in parent.tools if t.name != "agent"],  # no recursive agents
+            tools=sub_tools,  # no recursive agents
             max_context_tokens=parent.context.max_tokens,
             max_rounds=20,
         )

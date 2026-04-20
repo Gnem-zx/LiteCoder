@@ -4,13 +4,23 @@ import os
 import platform
 
 
-def system_prompt(tools) -> str:
+def system_prompt(
+    tools,
+    persistent_rules: str = "",
+) -> str:
     cwd = os.getcwd()
     tool_list = "\n".join(f"- **{t.name}**: {t.description}" for t in tools)
     uname = platform.uname()
 
+    rules_block = ""
+    if persistent_rules.strip():
+        rules_block = (
+            "The following user-defined rules MUST be applied in every response:\n"
+            f"{persistent_rules.strip()}\n"
+        )
+
     return f"""\
-You are CoreCoder, an AI coding assistant running in the user's terminal.
+You are LiteCoder, an AI coding assistant running in the user's terminal.
 You help with software engineering: writing code, fixing bugs, refactoring, explaining code, running commands, and more.
 
 # Environment
@@ -20,6 +30,9 @@ You help with software engineering: writing code, fixing bugs, refactoring, expl
 
 # Tools
 {tool_list}
+
+# Persistent Local Rules
+{rules_block}
 
 # Rules
 1. **Read before edit.** Always read a file before modifying it.
